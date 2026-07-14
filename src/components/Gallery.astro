@@ -1,0 +1,25 @@
+---
+const slides = [
+  { tag: '개막 공연', title: '빛의 퍼레이드', grad: 'linear-gradient(135deg,#ff7e5f,#feb47b)', icon: '🎪' },
+  { tag: '메인 무대', title: '라이브 사운드', grad: 'linear-gradient(135deg,#6a82fb,#a8c0ff)', icon: '🎸' },
+  { tag: '푸드존', title: '미식의 거리', grad: 'linear-gradient(135deg,#11998e,#38ef7d)', icon: '🍻' },
+  { tag: '피날레', title: '대형 불꽃쇼', grad: 'linear-gradient(135deg,#8e2de2,#4a00e0)', icon: '🎆' }
+];
+---
+<section class="gallery" id="gallery">
+  <h2 class="section-title">축제 하이라이트</h2>
+  <div class="swiper gallery-swiper">
+    <div class="swiper-wrapper">
+      {slides.map(s => (
+        <div class="swiper-slide" style={`background:${s.grad}`}>
+          <div class="slide-inner">
+            <span class="slide-icon">{s.icon}</span>
+            <span class="slide-tag">{s.tag}</span>
+            <h3 class="slide-title">{s.title}</h3>
+          </div>
+        </div>
+      ))}
+    </div>
+    <div class="swiper-pagination"></div>
+  </div>
+</section>

@@ -1,0 +1,192 @@
+---
+import 'swiper/css';
+import 'swiper/css/pagination';
+import 'swiper/css/effect-fade';
+import '../styles/global.css';
+import Hero from '../components/Hero.astro';
+import Gallery from '../components/Gallery.astro';
+import Footer from '../components/Footer.astro';
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>여름 빛 축제 2026</title>
+</head>
+<body>
+  <Hero />
+
+  <main id="menu" class="menu">
+    <h2 class="section-title">축제 메뉴</h2>
+    <div class="cards" id="cards">불러오는 중…</div>
+  </main>
+
+  <section class="ranking">
+    <h2 class="section-title">실시간 클릭 순위 <span class="live-dot"></span></h2>
+    <ol class="rank-list" id="rank-list">불러오는 중…</ol>
+  </section>
+
+  <Gallery />
+  <Footer />
+
+  <script>
+    import { supabase } from '../lib/supabase';
+    import gsap from 'gsap';
+    import { ScrollTrigger } from 'gsap/ScrollTrigger';
+    import confetti from 'canvas-confetti';
+    import Swiper from 'swiper';
+    import { Autoplay, Pagination, EffectFade } from 'swiper/modules';
+
+    gsap.registerPlugin(ScrollTrigger);
+
+    const fmt = (n) => Number(n || 0).toLocaleString('ko-KR');
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+
+    let rankingData = [];
+
+    async function loadSettings() {
+      const { data } = await supabase
+        .from('festival_settings')
+        .select('title,subtitle,organizer,contact_phone,contact_email,copyright')
+        .limit(1).single();
+      if (!data) return;
+      const t = document.getElementById('hero-title'); if (t) t.textContent = data.title;
+      const st = document.getElementById('hero-subtitle'); if (st) st.textContent = data.subtitle;
+      const fb = document.getElementById('footer-brand'); if (fb) fb.textContent = data.title;
+      const ft = document.getElementById('footer-text');
+      if (ft) ft.textContent = `주최 : ${data.organizer} · 문의 : ${data.contact_phone} · ${data.contact_email}`;
+      const fc = document.getElementById('footer-copy'); if (fc) fc.textContent = data.copyright;
+      document.title = data.title;
+    }
+
+    async function loadCards() {
+      const { data, error } = await supabase
+        .from('festival_programs')
+        .select('slug,icon,title,description,tag,click_count')
+        .eq('active', true)
+        .order('sort_order', { ascending: true });
+      const wrap = document.getElementById('cards');
+      if (error || !data) { wrap.textContent = '프로그램을 불러오지 못했습니다.'; return; }
+      if (!data.length) { wrap.textContent = '등록된 프로그램이 없습니다.'; return; }
+
+      wrap.innerHTML = '';
+      data.forEach((p) => {
+        const card = document.createElement('article');
+        card.className = 'card';
+        card.dataset.slug = p.slug;
+        card.innerHTML = `
+          <div class="card-icon">${esc(p.icon)}</div>
+          <h3 class="card-title">${esc(p.title)}</h3>
+          <p class="card-text">${esc(p.description)}</p>
+          <span class="card-tag">${esc(p.tag)}</span>
+          <div class="click-box">
+            <button class="click-btn" type="button">관심 있어요 ❤</button>
+            <span class="click-count">클릭 ${fmt(p.click_count)}회</span>
+          </div>`;
+        card.querySelector('.click-btn').addEventListener('click', () => recordClick(card, p.slug));
+        wrap.appendChild(card);
+      });
+
+      gsap.from('#cards .card', {
+        scrollTrigger: { trigger: '#menu', start: 'top 75%' },
+        y: 60, opacity: 0, duration: 0.6, stagger: 0.15, ease: 'power3.out'
+      });
+      ScrollTrigger.refresh();
+    }
+
+    async function recordClick(card, slug) {
+      const btn = card.querySelector('.click-btn');
+      const countEl = card.querySelector('.click-count');
+      btn.disabled = true;
+      const rect = card.getBoundingClientRect();
+      confetti({
+        particleCount: 90, spread: 75, startVelocity: 35,
+        origin: { x: (rect.left + rect.width / 2) / window.innerWidth, y: (rect.top + rect.height / 2) / window.innerHeight }
+      });
+      const { data, error } = await supabase.rpc('festival_record_click', { p_slug: slug });
+      btn.disabled = false;
+      if (error) { countEl.classList.add('error'); return; }
+      setCardCount(slug, data);
+      const row = rankingData.find((r) => r.slug === slug);
+      if (row) { row.click_count = data; renderRanking(); }
+    }
+
+    function setCardCount(slug, count) {
+      const card = document.querySelector(`.card[data-slug="${slug}"]`);
+      if (!card) return;
+      const el = card.querySelector('.click-count');
+      el.textContent = `클릭 ${fmt(count)}회`;
+      card.classList.add('clicked');
+      setTimeout(() => card.classList.remove('clicked'), 450);
+    }
+
+    function renderRanking() {
+      const list = document.getElementById('rank-list');
+      if (!rankingData.length) { list.textContent = '데이터 없음'; return; }
+      const sorted = [...rankingData].sort((a, b) => b.click_count - a.click_count || a.sort_order - b.sort_order);
+      list.innerHTML = '';
+      sorted.forEach((p, i) => {
+        const li = document.createElement('li');
+        li.className = 'rank-item';
+        li.dataset.slug = p.slug;
+        li.innerHTML = `
+          <span class="rank-no">${i + 1}</span>
+          <span class="rank-icon">${esc(p.icon)}</span>
+          <span class="rank-title">${esc(p.title)}</span>
+          <span class="rank-count">${fmt(p.click_count)}회</span>`;
+        list.appendChild(li);
+      });
+    }
+
+    async function loadStats() {
+      const { data } = await supabase.rpc('festival_click_stats');
+      if (data) { rankingData = data; renderRanking(); }
+    }
+
+    // Supabase Realtime: 모든 방문자 화면에 클릭 수 실시간 동기화
+    supabase
+      .channel('program-clicks')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'festival_programs' }, (payload) => {
+        const row = payload.new;
+        setCardCount(row.slug, row.click_count);
+        const r = rankingData.find((x) => x.slug === row.slug);
+        if (r) { r.click_count = row.click_count; r.active = row.active; renderRanking(); }
+      })
+      .subscribe();
+
+    // GSAP: 히어로 등장 애니메이션
+    gsap.from('[data-animate="hero-badge"]', { y: -20, opacity: 0, duration: 0.8, ease: 'power3.out' });
+    gsap.from('[data-animate="hero-title"]', { y: 50, opacity: 0, duration: 1, delay: 0.15, ease: 'power3.out' });
+    gsap.from('[data-animate="hero-subtitle"]', { y: 30, opacity: 0, duration: 1, delay: 0.3, ease: 'power3.out' });
+    gsap.from('[data-animate="hero-cta"]', { y: 20, opacity: 0, duration: 1, delay: 0.45, ease: 'power3.out' });
+
+    // GSAP: 섹션 스크롤 리빌
+    gsap.from('.ranking .section-title, .ranking #rank-list', {
+      scrollTrigger: { trigger: '.ranking', start: 'top 80%' },
+      y: 40, opacity: 0, duration: 0.7, stagger: 0.12, ease: 'power3.out'
+    });
+    gsap.from('.gallery .section-title, .gallery-swiper', {
+      scrollTrigger: { trigger: '.gallery', start: 'top 80%' },
+      y: 40, opacity: 0, duration: 0.7, stagger: 0.12, ease: 'power3.out'
+    });
+
+    // Swiper: 하이라이트 갤러리
+    new Swiper('.gallery-swiper', {
+      modules: [Autoplay, Pagination, EffectFade],
+      loop: true,
+      autoplay: { delay: 3500, disableOnInteraction: false },
+      pagination: { el: '.swiper-pagination', clickable: true },
+      effect: 'fade',
+      fadeEffect: { crossFade: true }
+    });
+
+    // 초기 로드
+    loadSettings();
+    loadCards();
+    loadStats();
+  </script>
+</body>
+</html>
