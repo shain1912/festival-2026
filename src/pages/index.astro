@@ -28,6 +28,27 @@ import Footer from '../components/Footer.astro';
   </section>
 
   <Gallery />
+
+  <section class="inquiry" id="inquiry">
+    <h2 class="section-title">축제 문의하기</h2>
+    <form class="inquiry-form" id="inquiry-form">
+      <div class="inquiry-field">
+        <label for="iq-name">이름</label>
+        <input type="text" id="iq-name" name="name" maxlength="60" required placeholder="홍길동" />
+      </div>
+      <div class="inquiry-field">
+        <label for="iq-email">이메일</label>
+        <input type="email" id="iq-email" name="email" required placeholder="you@example.com" />
+      </div>
+      <div class="inquiry-field">
+        <label for="iq-message">문의 내용</label>
+        <textarea id="iq-message" name="message" maxlength="2000" required placeholder="문의하실 내용을 입력해주세요."></textarea>
+      </div>
+      <button type="submit" class="inquiry-btn" id="inquiry-submit">문의 보내기</button>
+      <div class="inquiry-msg" id="inquiry-msg"></div>
+    </form>
+  </section>
+
   <Footer />
 
   <script>
@@ -40,36 +61,55 @@ import Footer from '../components/Footer.astro';
 
     gsap.registerPlugin(ScrollTrigger);
 
+    const API = location.hostname === 'localhost'
+      ? 'http://localhost:3001'
+      : 'https://festival-2026-api.onrender.com';
+
     const fmt = (n) => Number(n || 0).toLocaleString('ko-KR');
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
     ));
+    const timeAgo = (iso) => {
+      const diff = Date.now() - new Date(iso).getTime();
+      const m = Math.floor(diff / 60000);
+      if (m < 1) return '방금 전';
+      if (m < 60) return `${m}분 전`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}시간 전`;
+      const d = Math.floor(h / 24);
+      if (d < 30) return `${d}일 전`;
+      return new Date(iso).toLocaleDateString('ko-KR');
+    };
 
     let rankingData = [];
 
+    async function api(path, opts) {
+      const res = await fetch(API + path, opts);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    }
+
     async function loadSettings() {
-      const { data } = await supabase
-        .from('festival_settings')
-        .select('title,subtitle,organizer,contact_phone,contact_email,copyright')
-        .limit(1).single();
-      if (!data) return;
-      const t = document.getElementById('hero-title'); if (t) t.textContent = data.title;
-      const st = document.getElementById('hero-subtitle'); if (st) st.textContent = data.subtitle;
-      const fb = document.getElementById('footer-brand'); if (fb) fb.textContent = data.title;
-      const ft = document.getElementById('footer-text');
-      if (ft) ft.textContent = `주최 : ${data.organizer} · 문의 : ${data.contact_phone} · ${data.contact_email}`;
-      const fc = document.getElementById('footer-copy'); if (fc) fc.textContent = data.copyright;
-      document.title = data.title;
+      try {
+        const data = await api('/api/settings');
+        const t = document.getElementById('hero-title'); if (t) t.textContent = data.title;
+        const st = document.getElementById('hero-subtitle'); if (st) st.textContent = data.subtitle;
+        const fb = document.getElementById('footer-brand'); if (fb) fb.textContent = data.title;
+        const ft = document.getElementById('footer-text');
+        if (ft) ft.textContent = `주최 : ${data.organizer} · 문의 : ${data.contact_phone} · ${data.contact_email}`;
+        const fc = document.getElementById('footer-copy'); if (fc) fc.textContent = data.copyright;
+        document.title = data.title;
+      } catch (e) { console.error('settings:', e); }
     }
 
     async function loadCards() {
-      const { data, error } = await supabase
-        .from('festival_programs')
-        .select('slug,icon,title,description,tag,click_count')
-        .eq('active', true)
-        .order('sort_order', { ascending: true });
       const wrap = document.getElementById('cards');
-      if (error || !data) { wrap.textContent = '프로그램을 불러오지 못했습니다.'; return; }
+      let data;
+      try { data = await api('/api/programs'); }
+      catch (e) { wrap.textContent = '프로그램을 불러오지 못했습니다.'; return; }
       if (!data.length) { wrap.textContent = '등록된 프로그램이 없습니다.'; return; }
 
       wrap.innerHTML = '';
@@ -85,8 +125,28 @@ import Footer from '../components/Footer.astro';
           <div class="click-box">
             <button class="click-btn" type="button">관심 있어요 ❤</button>
             <span class="click-count">클릭 ${fmt(p.click_count)}회</span>
+          </div>
+          <button class="comment-toggle" type="button">댓글</button>
+          <div class="comment-section">
+            <div class="comment-list"></div>
+            <form class="comment-form">
+              <input type="text" class="comment-nick-input" placeholder="닉네임" maxlength="30" value="익명" />
+              <textarea class="comment-content-input" placeholder="댓글을 입력하세요" maxlength="500"></textarea>
+              <button type="submit" class="comment-submit-btn">등록</button>
+            </form>
           </div>`;
         card.querySelector('.click-btn').addEventListener('click', () => recordClick(card, p.slug));
+        const toggle = card.querySelector('.comment-toggle');
+        toggle.addEventListener('click', () => {
+          const sec = card.querySelector('.comment-section');
+          const open = sec.classList.toggle('open');
+          toggle.classList.toggle('active', open);
+          if (open) loadComments(card, p.slug);
+        });
+        card.querySelector('.comment-form').addEventListener('submit', (e) => {
+          e.preventDefault();
+          postComment(card, p.slug);
+        });
         wrap.appendChild(card);
       });
 
@@ -106,12 +166,16 @@ import Footer from '../components/Footer.astro';
         particleCount: 90, spread: 75, startVelocity: 35,
         origin: { x: (rect.left + rect.width / 2) / window.innerWidth, y: (rect.top + rect.height / 2) / window.innerHeight }
       });
-      const { data, error } = await supabase.rpc('festival_record_click', { p_slug: slug });
-      btn.disabled = false;
-      if (error) { countEl.classList.add('error'); return; }
-      setCardCount(slug, data);
-      const row = rankingData.find((r) => r.slug === slug);
-      if (row) { row.click_count = data; renderRanking(); }
+      try {
+        const data = await api(`/api/programs/${slug}/click`, { method: 'POST' });
+        btn.disabled = false;
+        setCardCount(slug, data.click_count);
+        const row = rankingData.find((r) => r.slug === slug);
+        if (row) { row.click_count = data.click_count; renderRanking(); }
+      } catch (e) {
+        btn.disabled = false;
+        countEl.classList.add('error');
+      }
     }
 
     function setCardCount(slug, count) {
@@ -121,6 +185,78 @@ import Footer from '../components/Footer.astro';
       el.textContent = `클릭 ${fmt(count)}회`;
       card.classList.add('clicked');
       setTimeout(() => card.classList.remove('clicked'), 450);
+    }
+
+    async function loadComments(card, slug) {
+      const list = card.querySelector('.comment-list');
+      const toggle = card.querySelector('.comment-toggle');
+      list.innerHTML = '<div class="comment-empty">불러오는 중…</div>';
+      try {
+        const comments = await api(`/api/programs/${slug}/comments`);
+        renderComments(list, comments);
+        toggle.textContent = `댓글 ${comments.length}`;
+      } catch (e) {
+        list.innerHTML = '<div class="comment-empty">댓글을 불러오지 못했습니다.</div>';
+      }
+    }
+
+    function renderComments(list, comments) {
+      if (!comments.length) {
+        list.innerHTML = '<div class="comment-empty">첫 댓글을 남겨보세요!</div>';
+        return;
+      }
+      list.innerHTML = '';
+      comments.forEach((c) => {
+        const div = document.createElement('div');
+        div.className = 'comment-item';
+        div.innerHTML = `
+          <div class="comment-head">
+            <span class="comment-nickname">${esc(c.nickname)}</span>
+            <span class="comment-time">${timeAgo(c.created_at)}</span>
+          </div>
+          <p class="comment-content">${esc(c.content)}</p>`;
+        list.appendChild(div);
+      });
+    }
+
+    async function postComment(card, slug) {
+      const nickInput = card.querySelector('.comment-nick-input');
+      const contentInput = card.querySelector('.comment-content-input');
+      const btn = card.querySelector('.comment-submit-btn');
+      const nickname = nickInput.value.trim() || '익명';
+      const content = contentInput.value.trim();
+      if (!content) return;
+
+      btn.disabled = true;
+      try {
+        const c = await api(`/api/programs/${slug}/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nickname, content })
+        });
+        const list = card.querySelector('.comment-list');
+        const toggle = card.querySelector('.comment-toggle');
+        const current = list.querySelectorAll('.comment-item');
+        if (current.length === 0 || list.querySelector('.comment-empty')) {
+          list.innerHTML = '';
+        }
+        const div = document.createElement('div');
+        div.className = 'comment-item';
+        div.innerHTML = `
+          <div class="comment-head">
+            <span class="comment-nickname">${esc(c.nickname)}</span>
+            <span class="comment-time">방금 전</span>
+          </div>
+          <p class="comment-content">${esc(c.content)}</p>`;
+        list.prepend(div);
+        contentInput.value = '';
+        const count = list.querySelectorAll('.comment-item').length;
+        toggle.textContent = `댓글 ${count}`;
+      } catch (e) {
+        alert(e.message || '댓글 작성에 실패했습니다.');
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     function renderRanking() {
@@ -142,9 +278,41 @@ import Footer from '../components/Footer.astro';
     }
 
     async function loadStats() {
-      const { data } = await supabase.rpc('festival_click_stats');
-      if (data) { rankingData = data; renderRanking(); }
+      try {
+        const data = await api('/api/stats');
+        if (data) { rankingData = data; renderRanking(); }
+      } catch (e) { console.error('stats:', e); }
     }
+
+    async function submitInquiry(e) {
+      e.preventDefault();
+      const form = document.getElementById('inquiry-form');
+      const btn = document.getElementById('inquiry-submit');
+      const msg = document.getElementById('inquiry-msg');
+      const name = form.name.value.trim();
+      const email = form.email.value.trim();
+      const message = form.message.value.trim();
+
+      btn.disabled = true;
+      msg.classList.remove('show', 'success', 'error');
+      try {
+        await api('/api/inquiries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email, message })
+        });
+        msg.textContent = '문의가 접수되었습니다. 빠른 시일 내에 답변드리겠습니다.';
+        msg.classList.add('show', 'success');
+        form.reset();
+      } catch (err) {
+        msg.textContent = err.message || '문의 접수에 실패했습니다. 잠시 후 다시 시도해주세요.';
+        msg.classList.add('show', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('inquiry-form').addEventListener('submit', submitInquiry);
 
     // Supabase Realtime: 모든 방문자 화면에 클릭 수 실시간 동기화
     supabase
@@ -170,6 +338,10 @@ import Footer from '../components/Footer.astro';
     });
     gsap.from('.gallery .section-title, .gallery-swiper', {
       scrollTrigger: { trigger: '.gallery', start: 'top 80%' },
+      y: 40, opacity: 0, duration: 0.7, stagger: 0.12, ease: 'power3.out'
+    });
+    gsap.from('.inquiry .section-title, .inquiry-form', {
+      scrollTrigger: { trigger: '.inquiry', start: 'top 80%' },
       y: 40, opacity: 0, duration: 0.7, stagger: 0.12, ease: 'power3.out'
     });
 
